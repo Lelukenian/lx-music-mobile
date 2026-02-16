@@ -1,0 +1,86 @@
+name: Build for TrollStore
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-manual-sign:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install JS Dependencies
+        run: |
+          npm install --legacy-peer-deps
+
+      - name: Install Pods
+        run: |
+          cd ios
+          rm -f Podfile.lock
+          pod install --repo-update
+
+      - name: 🔍 Detect Project
+        run: |
+          cd ios
+          # 自动识别项目名
+          WORKSPACE_FILE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          if [ -z "$WORKSPACE_FILE" ]; then
+            echo "❌ 找不到 .xcworkspace 文件"
+            exit 1
+          fi
+          SCHEME_NAME=$(basename "$WORKSPACE_FILE" .xcworkspace)
+          echo "PROJECT_NAME=$SCHEME_NAME" >> $GITHUB_ENV
+          echo "WORKSPACE_PATH=$WORKSPACE_FILE" >> $GITHUB_ENV
+          echo "✅ 检测到项目: $SCHEME_NAME"
+
+      - name: 🏗️ Build (No Sign)
+        run: |
+          cd ios
+          # 关键点1：这里使用 ALLOWED=NO，为了让 Xcode 顺利跑完编译，不报截图里的错
+          xcodebuild -workspace "${{ env.WORKSPACE_PATH }}" \
+            -scheme "${{ env.PROJECT_NAME }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: ✍️ Manual Fake Sign & Package
+        run: |
+          cd ios
+          mkdir Payload
+          
+          # 找到编译好的 .app
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+             echo "❌ 找不到 .app 文件"
+             exit 1
+          fi
+          
+          echo "📦 找到应用: $APP_PATH"
+          
+          # 关键点2：手动伪签名！
+          # 这步是专门解决 'not linked' 闪退问题的
+          # 我们在打包前，用命令行强制给它签一个 Ad-Hoc 名
+          echo "🔏 正在进行手动伪签名..."
+          codesign -s - --deep --force --preserve-metadata=identifier,entitlements "$APP_PATH"
+          
+          # 移动并压缩
+          mv "$APP_PATH" Payload/
+          zip -r trollstore-app-signed.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trollstore-ipa-final
+          path: ios/trollstore-app-signed.ipa
