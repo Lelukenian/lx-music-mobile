@@ -1,0 +1,92 @@
+name: Build for TrollStore
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  workflow_dispatch: # 允许你手动点击按钮触发
+
+jobs:
+  build-no-sign:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install JS Dependencies
+        run: |
+          # 使用 legacy-peer-deps 防止因版本冲突导致的安装失败
+          npm install --legacy-peer-deps
+
+      - name: Install Pods
+        run: |
+          cd ios
+          # 安装原生依赖
+          pod install --repo-update
+
+      - name: 🔍 Detect Project Name & Build
+        run: |
+          cd ios
+          echo "--------------------------------------"
+          echo "正在扫描 ios 文件夹下的文件..."
+          ls -al
+          echo "--------------------------------------"
+
+          # 1. 自动寻找 .xcworkspace 文件
+          # 解释：找到第一个后缀为 .xcworkspace 的文件
+          WORKSPACE_FILE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          
+          if [ -z "$WORKSPACE_FILE" ]; then
+            echo "❌ 严重错误: 找不到 .xcworkspace 文件！无法编译！"
+            exit 1
+          fi
+
+          # 2. 提取文件名作为 Scheme 名称
+          # 解释：去掉后缀，只保留名字。例如 lx_music.xcworkspace -> lx_music
+          SCHEME_NAME=$(basename "$WORKSPACE_FILE" .xcworkspace)
+
+          echo "✅ 自动识别成功！"
+          echo "   工作空间文件: $WORKSPACE_FILE"
+          echo "   项目名称 (Scheme): $SCHEME_NAME"
+
+          # 3. 开始编译 (无签名模式)
+          xcodebuild -workspace "$WORKSPACE_FILE" \
+            -scheme "$SCHEME_NAME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package into IPA
+        run: |
+          cd ios
+          # 再次获取名字用于打包
+          WORKSPACE_FILE=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          SCHEME_NAME=$(basename "$WORKSPACE_FILE" .xcworkspace)
+          
+          mkdir Payload
+          # 查找生成的 .app 文件 (因为有时候名字可能大小写不一致，所以用 find 模糊查找)
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -n 1)
+          
+          if [ -z "$APP_PATH" ]; then
+             echo "❌ 错误: 编译好像成功了，但在输出目录找不到 .app 文件"
+             ls -R build/Build/Products/
+             exit 1
+          fi
+          
+          echo "📦 正在打包: $APP_PATH"
+          mv "$APP_PATH" Payload/
+          zip -r trollstore-app.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trollstore-ipa
+          path: ios/trollstore-app.ipa
