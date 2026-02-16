@@ -1,0 +1,60 @@
+name: Build for TrollStore
+
+on:
+  push:
+    branches: [ "main" ] # 或者 "master"
+  workflow_dispatch: # 允许手动点击触发
+
+jobs:
+  build-no-sign:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18 # 根据你的项目需求调整
+
+      - name: Install JS Dependencies
+        run: |
+          npm install
+          # 或者 yarn install
+
+      - name: Install Pods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: Build Unsigned App
+        run: |
+          cd ios
+          # 关键步骤：使用 xcodebuild 编译，禁用签名要求
+          # 请将 YourProjectName 替换为你 ios 目录下的 .xcworkspace 文件名前缀
+          xcodebuild -workspace LxMusic.xcworkspace \
+            -scheme LxMusic \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package into IPA
+        run: |
+          cd ios
+          # 创建 Payload 文件夹（这是 IPA 的标准结构）
+          mkdir Payload
+          # 将编译好的 .app 文件移动到 Payload 中
+          # 注意：路径通常在 build/Build/Products/Release-iphoneos/ 下
+          mv build/Build/Products/Release-iphoneos/*.app Payload/
+          # 压缩成 .ipa 文件
+          zip -r trollstore-app.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: trollstore-ipa
+          path: ios/trollstore-app.ipa
